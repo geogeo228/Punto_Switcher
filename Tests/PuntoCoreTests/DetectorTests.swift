@@ -51,6 +51,19 @@ private struct FakeSpell: SpellChecking {
         #expect(d.decide("[jhjij") == .switchLayout(replacement: "хорошо", target: .russian))
     }
 
+    @Test func shortWordWithApostropheKeyIsSwitched() {
+        // «это» в EN-раскладке — "'nj" (апостроф = э). Букв в сыром виде 2,
+        // но слово трёхсимвольное и должно проверяться.
+        let d = makeDetector(ru: ["это"], en: [])
+        #expect(d.decide("'nj") == .switchLayout(replacement: "это", target: .russian))
+    }
+
+    @Test func shortWordWithSemicolonKeyIsSwitched() {
+        // «жук» — ";er" (точка с запятой = ж).
+        let d = makeDetector(ru: ["жук"], en: [])
+        #expect(d.decide(";er") == .switchLayout(replacement: "жук", target: .russian))
+    }
+
     @Test func exceptionWordLeftAlone() {
         let d = makeDetector(ru: ["привет"], en: [], exceptions: ["ghbdtn"])
         #expect(d.decide("ghbdtn") == .leave)

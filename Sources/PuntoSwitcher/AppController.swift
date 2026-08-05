@@ -20,13 +20,8 @@ final class AppController {
     private var isEnabled = true
     private var accessibilityRetryTimer: Timer?
 
-    /// Последнее слово «на экране» — для ручного форса по хоткею.
-    private var lastWord: LastWord?
-    private struct LastWord {
-        var text: String          // что сейчас на экране
-        var separator: String     // хвостовой разделитель на экране ("" если слово ещё печатается)
-        var fromAutoSwitch: Bool  // получено авто-заменой (тогда форс = откат с обучением)
-    }
+    /// Что сейчас лежит на экране (слово + хвост) — для хоткея ⌃⌥U.
+    private let tracker = ScreenWordTracker()
 
     // Пробел — единственный разделитель, ТРИГГЕРЯЩИЙ авто-замену.
     private static let spaceKey: Int64 = 49
@@ -55,7 +50,18 @@ final class AppController {
         tap.onKeyDown = { [weak self] event in self?.handleKeyDown(event) }
         tap.onReset = { [weak self] in
             self?.buffer.reset()
-            self?.lastWord = nil
+            self?.tracker.reset()
+        }
+
+        // ⌘Tab/Dock: смена активного приложения не проходит через тап (⌘-события
+        // отфильтрованы), поэтому слушаем NSWorkspace — иначе недопечатанное слово
+        // «переезжает» в другое приложение и хоткей бьёт по чужому полю.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.buffer.reset()
+            self?.tracker.reset()
         }
 
         hotkey.onTrigger = { [weak self] in self?.flipLastWord() }
@@ -127,17 +133,21 @@ final class AppController {
 
         if Self.navigationKeys.contains(keycode) {
             buffer.reset()
-            lastWord = nil   // курсор ушёл — форсить старое слово небезопасно
+            tracker.reset()   // курсор ушёл — форсить старое слово небезопасно
             return
         }
         if keycode == Self.deleteKey {
-            buffer.backspace()
+            if buffer.isEmpty {
+                tracker.backspace()   // стирают уже завершённое слово/его хвост
+            } else {
+                buffer.backspace()
+            }
             return
         }
         // Enter/Tab — завершают слово без авто-замены (см. flushKeys).
         if Self.flushKeys.contains(keycode) {
             buffer.reset()
-            lastWord = nil
+            tracker.reset()
             return
         }
 
@@ -147,6 +157,8 @@ final class AppController {
         if isSeparator {
             if let word = buffer.commit() {
                 process(word: word, separator: " ")
+            } else {
+                tracker.appendSeparator(" ")   // лишний пробел после слова — хвост растёт
             }
             return
         }
@@ -174,7 +186,7 @@ final class AppController {
     private func process(word: String, separator: String) {
         guard case let .switchLayout(replacement, target) = detector.decide(word) else {
             // Авто ничего не тронуло — запоминаем как есть, чтобы можно было форснуть вручную.
-            lastWord = LastWord(text: word, separator: separator, fromAutoSwitch: false)
+            tracker.set(text: word, separator: separator, fromAutoSwitch: false)
             return
         }
         performSwitch(word: word, replacement: replacement, target: target, separator: separator)
@@ -197,7 +209,7 @@ final class AppController {
             insertedText: insertedText,
             typedText: typedText
         ))
-        lastWord = LastWord(text: replacement, separator: separator, fromAutoSwitch: true)
+        tracker.set(text: replacement, separator: separator, fromAutoSwitch: true)
     }
 
     /// Хоткей ⌃⌥U: перекинуть последнее слово в другую раскладку.
@@ -210,17 +222,18 @@ final class AppController {
             forceFlip(text: w, separator: "", deleteCount: w.count)
             return
         }
-        // 2) Последнее завершённое слово.
-        guard let lw = lastWord else { return }
+        // 2) Последнее завершённое слово (с учётом лишних пробелов/backspace).
+        guard let st = tracker.state else { return }
 
-        // Если это была авто-замена — идём через откат (с обучением-исключением).
-        if lw.fromAutoSwitch, undo.canRevert {
+        // Нетронутая авто-замена — откат с обучением-исключением. Если после замены
+        // были правки (edited), записанный откат уже не совпадает с экраном —
+        // переворачиваем то, что реально на экране.
+        if st.fromAutoSwitch, !st.edited, undo.canRevert {
             performAutoUndo()
             return
         }
-        // Иначе — обычный форс того, что на экране.
-        forceFlip(text: lw.text, separator: lw.separator,
-                  deleteCount: lw.text.count + lw.separator.count)
+        forceFlip(text: st.text, separator: st.separator,
+                  deleteCount: st.text.count + st.separator.count)
     }
 
     /// Безусловно перекинуть слово в другую раскладку (без словаря).
@@ -230,7 +243,7 @@ final class AppController {
         let target: LayoutMapper.Layout =
             LayoutMapper.script(of: flipped) == .russian ? .russian : .english
         switcher.select(target)
-        lastWord = LastWord(text: flipped, separator: separator, fromAutoSwitch: false)
+        tracker.set(text: flipped, separator: separator, fromAutoSwitch: false)
     }
 
     /// Откат авто-замены + учёт серии откатов (три подряд по одному слову → в исключения).
@@ -242,7 +255,7 @@ final class AppController {
         buffer.reset()
 
         let sep = String(r.typedText.dropFirst(r.original.count))
-        lastWord = LastWord(text: r.original, separator: sep, fromAutoSwitch: false)
+        tracker.set(text: r.original, separator: sep, fromAutoSwitch: false)
 
         if result.shouldAddException {
             exceptions.add(r.original)

@@ -21,6 +21,10 @@ final class TextReplacer {
 
     private func postKey(_ key: CGKeyCode, down: Bool) {
         guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { return }
+        // В момент срабатывания хоткея ⌃⌥U модификаторы физически зажаты, и событие
+        // от .combinedSessionState унаследовало бы их — приложение получило бы ⌃⌥⌫
+        // вместо Backspace и проигнорировало бы удаление. Флаги обнуляем явно.
+        event.flags = []
         event.setIntegerValueField(.eventSourceUserData, value: SyntheticMarker.value)
         event.post(tap: .cgSessionEventTap)
     }
@@ -30,6 +34,9 @@ final class TextReplacer {
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: down) else { continue }
             event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: &units)
+            // Те же зажатые ⌃⌥, что и в postKey: без чистки флагов вставка может
+            // трактоваться приложением как шорткат.
+            event.flags = []
             event.setIntegerValueField(.eventSourceUserData, value: SyntheticMarker.value)
             event.post(tap: .cgSessionEventTap)
         }
