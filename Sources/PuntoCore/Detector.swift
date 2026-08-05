@@ -29,11 +29,12 @@ public struct Detector {
 
     public func decide(_ raw: String) -> Decision {
         let word = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Считаем буквы в исходнике: слово в неправильной раскладке может содержать
-        // пунктуационные клавиши ([ ] ; ' — это буквы х ъ ж э в русской раскладке),
-        // поэтому «только буквы» проверяем не здесь, а на СКОНВЕРТИРОВАННОМ результате.
-        let letterCount = word.filter { $0.isLetter }.count
-        guard letterCount >= minLength else { return .leave }
+        // Длину меряем по ВСЕМ символам, а не по буквам исходника: слово в неправильной
+        // раскладке может содержать пунктуационные клавиши ([ ] ; ' — это буквы х ъ ж э
+        // в русской раскладке), из-за подсчёта «только букв» короткие слова вроде
+        // «это» ('nj) вообще не проверялись. Конвертация посимвольная 1:1, и фильтр
+        // isAllLetters(converted) ниже гарантирует, что каждый символ станет буквой.
+        guard word.count >= minLength else { return .leave }
         guard !word.contains(where: { $0.isNumber }) else { return .leave }
         guard !isAllCaps(word) else { return .leave }
         guard !isCamelCase(word) else { return .leave }
