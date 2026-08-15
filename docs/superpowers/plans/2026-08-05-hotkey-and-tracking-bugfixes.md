@@ -16,7 +16,7 @@
 - macOS 13+, `swift-tools-version:6.0`, `swiftLanguageModes: [.v5]` — не менять.
 - Тесты — swift-testing (`import Testing`, `@Suite`, `@Test`, `#expect`), как в существующих файлах `Tests/PuntoCoreTests/*.swift`.
 - Комментарии в коде — по-русски, в стиле существующих файлов.
-- Все команды выполнять из корня проекта: `/Users/georgi/Desktop/ПРОЕКТЫ/Punto_Switcher`.
+- Все команды выполнять из корня проекта (там, где лежит `Package.swift`).
 
 ---
 

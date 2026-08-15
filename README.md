@@ -88,6 +88,13 @@ sudo fs_usage -f filesys -p "$(pgrep PuntoSwitcher)"
   `TextReplacer`, `InputSourceSwitcher` (TIS), `SystemSpellChecker` (NSSpellChecker),
   `HotkeyController` (Carbon), `MenuBarController`, `AppController`.
 
+## Лицензия
+
+MIT — см. [LICENSE](LICENSE).
+
+> «Punto Switcher» — товарный знак Яндекса. Этот проект не связан с Яндексом,
+> написан с нуля и упоминает оригинал только для описания класса задачи.
+
 ## Известные ограничения v1
 
 - Только стандартные раскладки US QWERTY и русская ЙЦУКЕН.
