@@ -12,10 +12,15 @@ final class AppController {
     private let hotkey = HotkeyController()
     private let menu = MenuBarController()
     private let spell = SystemSpellChecker()
+    private let toast = ToastWindow()
 
     private let exceptions: ExceptionsStore
+    /// Второй список: слова, которые надо переключать всегда (короткие вроде «рш» → «hi»).
+    private let alwaysSwitch: ExceptionsStore
     private let detector: Detector
     private let undo = UndoManagerLite()
+    /// Серия нажатий хоткея по одному слову: 3 подряд → слово в исключения.
+    private let streak = FlipStreak(threshold: 3)
 
     private var isEnabled = true
     private var accessibilityRetryTimer: Timer?
@@ -39,8 +44,10 @@ final class AppController {
 
     init() {
         let store = ExceptionsStore(fileURL: ExceptionsStore.defaultFileURL())
+        let always = ExceptionsStore(fileURL: ExceptionsStore.defaultFileURL(named: "autoswitch.txt"))
         self.exceptions = store
-        self.detector = Detector(spell: spell, exceptions: store)
+        self.alwaysSwitch = always
+        self.detector = Detector(spell: spell, exceptions: store, alwaysSwitch: always)
     }
 
     func start() {
@@ -106,8 +113,25 @@ final class AppController {
 
     private func setupMenu() {
         menu.isEnabled = isEnabled
-        menu.onToggle = { [weak self] enabled in self?.isEnabled = enabled }
+        menu.onToggle = { [weak self] enabled in
+            self?.isEnabled = enabled
+            self?.streak.reset()   // пауза обрывает серию: контекст всё равно потерян
+        }
         menu.onQuit = { NSApp.terminate(nil) }
+        // Оба файла можно править руками — перечитываем при каждом открытии меню,
+        // чтобы удалённое слово переставало действовать без перезапуска приложения.
+        menu.onMenuWillOpen = { [weak self] in
+            self?.exceptions.reload()
+            self?.alwaysSwitch.reload()
+        }
+        menu.onOpenExceptions = { [weak self] in
+            guard let url = self?.exceptions.ensureFileExists() else { return }
+            NSWorkspace.shared.open(url)
+        }
+        menu.onOpenAutoSwitch = { [weak self] in
+            guard let url = self?.alwaysSwitch.ensureFileExists() else { return }
+            NSWorkspace.shared.open(url)
+        }
         menu.install()
 
         if !spell.hasDictionary(for: "ru") {
@@ -202,6 +226,8 @@ final class AppController {
         switcher.select(target)
 
         let previousLayout: LayoutMapper.Layout = (target == .russian) ? .english : .russian
+        // Серия «нажал хоткей по этому слову» начинается только с реальной автозамены.
+        streak.autoSwitched(typed: word, converted: replacement)
         undo.record(Replacement(
             original: word,
             replacement: replacement,
@@ -219,21 +245,78 @@ final class AppController {
         if !buffer.isEmpty {
             let w = buffer.current
             buffer.reset()
-            forceFlip(text: w, separator: "", deleteCount: w.count)
+            handleFlip(text: w, separator: "", canAutoUndo: false)
             return
         }
         // 2) Последнее завершённое слово (с учётом лишних пробелов/backspace).
         guard let st = tracker.state else { return }
 
-        // Нетронутая авто-замена — откат с обучением-исключением. Если после замены
-        // были правки (edited), записанный откат уже не совпадает с экраном —
-        // переворачиваем то, что реально на экране.
-        if st.fromAutoSwitch, !st.edited, undo.canRevert {
+        // Нетронутая авто-замена откатывается «как было». Если после замены были правки
+        // (edited), записанный откат уже не совпадает с экраном — переворачиваем то,
+        // что реально на экране.
+        handleFlip(text: st.text, separator: st.separator,
+                   canAutoUndo: st.fromAutoSwitch && !st.edited && undo.canRevert)
+    }
+
+    /// Одно нажатие хоткея: сначала учёт серии, потом собственно переворот.
+    ///
+    /// Серия считает ЛЮБЫЕ нажатия по одному слову, поэтому третье нажатие подряд
+    /// (откат → форс → форс) добавляет слово в исключения. К этому моменту на экране
+    /// уже должна стоять исходная набранная форма — если вдруг нет (например, в серию
+    /// затесалось нажатие по правленому слову), доворачиваем принудительно.
+    private func handleFlip(text: String, separator: String, canAutoUndo: Bool) {
+        let deleteCount = text.count + separator.count
+
+        switch streak.press(on: text) {
+        case .counted:
+            break
+
+        case let .learnException(typedForm):
+            // Автозамена портила это слово — запрещаем её для него.
+            alwaysSwitch.remove(typedForm)
+            exceptions.add(typedForm)
+            announce(menuLine: "Исключение: \(typedForm)",
+                     toastLine: "✓ «\(typedForm)» — больше не трогаю")
+            undo.reset()
+            // На экране должна остаться исходная набранная форма.
+            settle(to: typedForm, text: text, separator: separator, deleteCount: deleteCount)
+            return
+
+        case let .learnAutoSwitch(typedForm):
+            // Автозамена молчала (слишком короткое слово и т.п.), а переключать надо.
+            // Учим только если слово провалилось именно по длине — иначе тремя случайными
+            // нажатиями можно научить приложение ломать настоящее слово.
+            let flipped = LayoutMapper.flipped(typedForm)
+            if detector.wouldSwitchIgnoringLength(typedForm) {
+                exceptions.remove(typedForm)
+                alwaysSwitch.add(typedForm)
+                announce(menuLine: "Автозамена: \(typedForm) → \(flipped)",
+                         toastLine: "✓ «\(typedForm)» → «\(flipped)» — теперь переключаю сам")
+            }
+            undo.reset()
+            // Здесь нужная форма — перевёрнутая: пользователь именно её и добивался.
+            settle(to: flipped, text: text, separator: separator, deleteCount: deleteCount)
+            return
+        }
+
+        if canAutoUndo {
             performAutoUndo()
             return
         }
-        forceFlip(text: st.text, separator: st.separator,
-                  deleteCount: st.text.count + st.separator.count)
+        forceFlip(text: text, separator: separator, deleteCount: deleteCount)
+    }
+
+    /// Довести экран до нужной формы слова: если она уже там — не трогаем текст вовсе.
+    private func settle(to wanted: String, text: String, separator: String, deleteCount: Int) {
+        guard text.lowercased() != wanted.lowercased() else { return }
+        forceFlip(text: text, separator: separator, deleteCount: deleteCount)
+    }
+
+    private func announce(menuLine: String, toastLine: String) {
+        menu.noteLearned(menuLine)
+        // Иконка в углу экрана незаметна ровно тогда, когда нужна: пользователь
+        // смотрит в поле ввода. Плашка всплывает у курсора, там же, где взгляд.
+        toast.show(toastLine)
     }
 
     /// Безусловно перекинуть слово в другую раскладку (без словаря).
@@ -246,20 +329,15 @@ final class AppController {
         tracker.set(text: flipped, separator: separator, fromAutoSwitch: false)
     }
 
-    /// Откат авто-замены + учёт серии откатов (три подряд по одному слову → в исключения).
+    /// Откат авто-замены: возвращаем ровно то, что было напечатано, и прежнюю раскладку.
     private func performAutoUndo() {
-        guard let result = undo.revert() else { return }
-        let r = result.replacement
+        guard let r = undo.revert() else { return }
         replacer.replace(deleteCount: r.insertedText.count, insert: r.typedText)
         switcher.select(r.previousLayout)
         buffer.reset()
 
         let sep = String(r.typedText.dropFirst(r.original.count))
         tracker.set(text: r.original, separator: sep, fromAutoSwitch: false)
-
-        if result.shouldAddException {
-            exceptions.add(r.original)
-        }
     }
 
     // MARK: - Accessibility

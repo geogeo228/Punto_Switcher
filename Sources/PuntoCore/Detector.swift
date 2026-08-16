@@ -19,16 +19,45 @@ public enum Decision: Equatable {
 public struct Detector {
     private let spell: SpellChecking
     private let exceptions: ExceptionsStore
+    /// Слова, которые пользователь научил переключать всегда (минуя длину и словарь).
+    private let alwaysSwitch: ExceptionsStore?
     private let minLength: Int
 
-    public init(spell: SpellChecking, exceptions: ExceptionsStore, minLength: Int = 3) {
+    public init(spell: SpellChecking,
+                exceptions: ExceptionsStore,
+                alwaysSwitch: ExceptionsStore? = nil,
+                minLength: Int = 3) {
         self.spell = spell
         self.exceptions = exceptions
+        self.alwaysSwitch = alwaysSwitch
         self.minLength = minLength
     }
 
     public func decide(_ raw: String) -> Decision {
+        evaluate(raw, minLength: minLength)
+    }
+
+    /// Переключил бы детектор это слово, если бы не порог длины?
+    ///
+    /// Нужен обучению: в список «всегда переключать» пускаем только слова, которые
+    /// провалились ИМЕННО по длине, а не по словарю. Иначе тремя случайными нажатиями
+    /// можно научить приложение ломать настоящее слово.
+    public func wouldSwitchIgnoringLength(_ raw: String) -> Bool {
+        if case .switchLayout = evaluate(raw, minLength: 1) { return true }
+        return false
+    }
+
+    private func evaluate(_ raw: String, minLength: Int) -> Decision {
         let word = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Исключения сильнее всего: явное «не трогай» бьёт даже явное «всегда переключай».
+        guard !exceptions.contains(word) else { return .leave }
+        // Слово, которому пользователь научил вручную: переворачиваем без вопросов.
+        if alwaysSwitch?.contains(word) == true, !word.isEmpty {
+            let flipped = LayoutMapper.flipped(word)
+            let target: LayoutMapper.Layout =
+                LayoutMapper.script(of: flipped) == .russian ? .russian : .english
+            return .switchLayout(replacement: flipped, target: target)
+        }
         // Длину меряем по ВСЕМ символам, а не по буквам исходника: слово в неправильной
         // раскладке может содержать пунктуационные клавиши ([ ] ; ' — это буквы х ъ ж э
         // в русской раскладке), из-за подсчёта «только букв» короткие слова вроде
@@ -38,7 +67,6 @@ public struct Detector {
         guard !word.contains(where: { $0.isNumber }) else { return .leave }
         guard !isAllCaps(word) else { return .leave }
         guard !isCamelCase(word) else { return .leave }
-        guard !exceptions.contains(word) else { return .leave }
 
         let currentScript = LayoutMapper.script(of: word)
         let sourceLang: String
