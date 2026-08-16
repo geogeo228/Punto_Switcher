@@ -18,8 +18,13 @@ public final class ExceptionsStore {
 
     /// Путь по умолчанию: ~/Library/Application Support/PuntoSwitcher/exceptions.txt
     public static func defaultFileURL() -> URL {
+        defaultFileURL(named: "exceptions.txt")
+    }
+
+    /// Тот же формат, другой файл — например `autoswitch.txt` для списка «всегда переключать».
+    public static func defaultFileURL(named name: String) -> URL {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return base.appendingPathComponent("PuntoSwitcher/exceptions.txt")
+        return base.appendingPathComponent("PuntoSwitcher/\(name)")
     }
 
     public func contains(_ word: String) -> Bool {
@@ -34,7 +39,30 @@ public final class ExceptionsStore {
         if inserted { save() }
     }
 
+    /// Убрать слово из списка (напр. оно переехало в противоположный список).
+    public func remove(_ word: String) {
+        if words.remove(normalize(word)) != nil { save() }
+    }
+
     public var all: [String] { words.sorted() }
+
+    /// Путь к файлу списка (nil в режиме «только в памяти»).
+    public var url: URL? { fileURL }
+
+    /// Перечитать файл с диска: пользователь мог поправить список руками.
+    /// Память полностью заменяется содержимым файла — удалённые строки реально уходят.
+    public func reload() {
+        words.removeAll()
+        load()
+    }
+
+    /// Создать файл (и папку), если его ещё нет, — чтобы его можно было открыть в редакторе.
+    @discardableResult
+    public func ensureFileExists() -> URL? {
+        guard let url = fileURL else { return nil }
+        if !FileManager.default.fileExists(atPath: url.path) { save() }
+        return url
+    }
 
     // MARK: - Персист
 

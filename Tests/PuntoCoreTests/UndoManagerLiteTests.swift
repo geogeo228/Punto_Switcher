@@ -12,8 +12,7 @@ import Testing
         #expect(!u.canRevert)
         u.record(rep("ghbdtn"))
         #expect(u.canRevert)
-        let result = u.revert()
-        #expect(result?.replacement.original == "ghbdtn")
+        #expect(u.revert()?.original == "ghbdtn")
         #expect(!u.canRevert)
     }
 
@@ -22,44 +21,27 @@ import Testing
         #expect(u.revert() == nil)
     }
 
-    @Test func learningAfterThreshold() {
-        let u = UndoManagerLite(undoThreshold: 3)
-        for i in 1...3 {
-            u.record(rep("wtf"))
-            let r = u.revert()
-            if i < 3 {
-                #expect(r?.shouldAddException == false)
-            } else {
-                #expect(r?.shouldAddException == true)
-            }
-        }
+    /// Одну и ту же замену дважды не откатить — иначе второй хоткей испортит текст.
+    @Test func revertIsSingleUse() {
+        let u = UndoManagerLite()
+        u.record(rep("ghbdtn"))
+        _ = u.revert()
+        #expect(u.revert() == nil)
     }
 
-    @Test func differentWordResetsStreak() {
-        let u = UndoManagerLite(undoThreshold: 3)
-        u.record(rep("wtf")); _ = u.revert()
-        u.record(rep("wtf")); _ = u.revert()
-        u.record(rep("lol")); let r = u.revert()
-        #expect(r?.shouldAddException == false)
+    /// Новая замена перекрывает старую.
+    @Test func recordOverwrites() {
+        let u = UndoManagerLite()
+        u.record(rep("ghbdtn"))
+        u.record(rep("cjxb"))
+        #expect(u.revert()?.original == "cjxb")
     }
 
-    /// Между откатами «wtf» проскочило принятое авто-переключение другого слова —
-    /// серия должна обнулиться, слово НЕ добавляется, даже если всего откатов ≥3.
-    @Test func interruptingSwitchResetsStreak() {
-        let u = UndoManagerLite(undoThreshold: 3)
-        u.record(rep("wtf")); _ = u.revert()   // streak 1
-        u.record(rep("wtf")); _ = u.revert()   // streak 2
-        u.record(rep("abc"))                    // другое слово переключилось (принято, без отката)
-        u.record(rep("wtf")); let r = u.revert() // серия начата заново → streak 1
-        #expect(r?.shouldAddException == false)
-    }
-
-    /// Три отката одного слова ПОДРЯД (без прерываний) — добавляется.
-    @Test func threeConsecutiveAdds() {
-        let u = UndoManagerLite(undoThreshold: 3)
-        u.record(rep("wtf")); _ = u.revert()
-        u.record(rep("wtf")); _ = u.revert()
-        u.record(rep("wtf")); let r = u.revert()
-        #expect(r?.shouldAddException == true)
+    @Test func resetForgetsLast() {
+        let u = UndoManagerLite()
+        u.record(rep("ghbdtn"))
+        u.reset()
+        #expect(!u.canRevert)
+        #expect(u.revert() == nil)
     }
 }

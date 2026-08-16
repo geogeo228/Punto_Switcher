@@ -23,35 +23,16 @@ public struct Replacement: Equatable {
     }
 }
 
-/// Результат отката.
-public struct RevertResult: Equatable {
-    public let replacement: Replacement
-    /// true → пользователь откатил это слово достаточно раз, слово надо добавить в исключения.
-    public let shouldAddException: Bool
-}
-
-/// Лёгкий менеджер отмены в RAM: помнит последнюю замену и считает повторные откаты
-/// одного и того же слова. После `undoThreshold` откатов подряд предлагает добавить слово
-/// в исключения — механика «обучения», как в оригинальном Punto Switcher.
+/// Лёгкий менеджер отмены в RAM: помнит последнюю автозамену, чтобы её можно было откатить
+/// ровно один раз. Учётом повторных нажатий и обучением исключений занимается `FlipStreak` —
+/// здесь только «что вернуть на экран».
 public final class UndoManagerLite {
     private var last: Replacement?
-    private var lastRevertedWord: String?
-    private var revertStreak = 0
-    private let undoThreshold: Int
 
-    /// - Parameter undoThreshold: сколько раз подряд надо откатить слово, чтобы оно ушло в исключения.
-    public init(undoThreshold: Int = 3) {
-        self.undoThreshold = undoThreshold
-    }
+    public init() {}
 
     /// Записать выполненную автозамену.
-    /// Если авто-переключилось ДРУГОЕ слово — серия откатов «подряд» прерывается и обнуляется,
-    /// поэтому в исключения слово уходит только после трёх откатов ОДНОГО и того же слова подряд.
     public func record(_ replacement: Replacement) {
-        if replacement.original != lastRevertedWord {
-            revertStreak = 0
-            lastRevertedWord = nil
-        }
         last = replacement
     }
 
@@ -59,28 +40,12 @@ public final class UndoManagerLite {
     public var canRevert: Bool { last != nil }
 
     /// Откатить последнюю замену. Возвращает данные для отката или nil, если откатывать нечего.
-    public func revert() -> RevertResult? {
-        guard let replacement = last else { return nil }
-
-        // Считаем серию откатов одного и того же исходного слова.
-        if lastRevertedWord == replacement.original {
-            revertStreak += 1
-        } else {
-            lastRevertedWord = replacement.original
-            revertStreak = 1
-        }
-
-        // Слово (в правильной раскладке — то, что мы навязали) добавляем в исключения,
-        // чтобы «replacement» (напр. wtf→туа) больше не срабатывал: исключаем ИСХОДНОЕ слово.
-        let shouldAdd = revertStreak >= undoThreshold
-
-        last = nil  // одно и то же нельзя откатить дважды
-        return RevertResult(replacement: replacement, shouldAddException: shouldAdd)
+    /// Одну и ту же замену откатить дважды нельзя.
+    public func revert() -> Replacement? {
+        defer { last = nil }
+        return last
     }
 
-    /// Сбросить серию (напр. пользователь начал печатать другое).
-    public func resetStreak() {
-        lastRevertedWord = nil
-        revertStreak = 0
-    }
+    /// Забыть последнюю замену (слово ушло в исключения, фокус сменился и т.п.).
+    public func reset() { last = nil }
 }
